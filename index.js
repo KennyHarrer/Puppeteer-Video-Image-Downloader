@@ -18,7 +18,7 @@ async function waitForRequestLoad(requestID) {
     requests[requestID].loaded = waitForLoad;
     await requestLoaded;
 }
-//used for generating file names
+
 function generateRandomFileName(length = 8) {
     return Math.random().toString(16).substr(2, length);
 }
