@@ -63,9 +63,17 @@ function randomName(length = 8) {
         //wait for the request to load
         await waitForRequestLoad(requestId);
         //grab the request data
-        let requestData = await client.send('Network.getResponseBody', { requestId });
-        //create the buffer
+        let requestData;
+        try {
+            requestData = await client.send('Network.getResponseBody', { requestId });
+        } catch (error) {
+            if (error.originalMessage == 'Request content was evicted from inspector cache') {
+                throw new Error('Increase bufferLimit in index.js');
+            }
+            throw error;
+        }
 
+        //create buffer from data
         let requestBuffer = Buffer.from(
             requestData.body,
             requestData.base64Encoded ? 'base64' : 'utf8'
