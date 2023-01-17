@@ -1,0 +1,15 @@
+{
+  "name": "puppeteer-download",
+  "version": "1.0.0",
+  "description": "downloads images and videos from a website",
+  "main": "test.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "kenny harrer",
+  "license": "ISC",
+  "dependencies": {
+    "puppeteer": "^19.5.2"
+  },
+  "devDependencies": {}
+}
