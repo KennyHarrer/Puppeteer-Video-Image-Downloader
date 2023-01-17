@@ -4,7 +4,7 @@ const fs = require('fs');
 
 const downloadPath = path.resolve(__dirname, 'downloads');
 let targetURL = 'https://example-img-and-video.triggeredforday.repl.co/';
-let download = { media: true, image: true };
+let downloadFilter = { media: true, image: true };
 let bufferLimit = 50; //in MB
 let requests = {};
 
@@ -19,7 +19,7 @@ async function waitForRequestLoad(requestID) {
     await requestLoaded;
 }
 //used for generating file names
-function randomName(length = 8) {
+function generateRandomFileName(length = 8) {
     return Math.random().toString(16).substr(2, length);
 }
 
@@ -57,7 +57,7 @@ function randomName(length = 8) {
         let { requestId, response, type } = event;
         let { url, headers, mimeType } = response;
 
-        if (!download[type.toLowerCase()]) return; // if i'm not going to be downloaded disregaurd
+        if (!downloadFilter[type.toLowerCase()]) return; // if i'm not going to be downloaded disregaurd
         if (mimeType == 'image/svg+xml') return; //hide these, if you want to download these files simply remove this line.
 
         //wait for the request to load
@@ -89,7 +89,7 @@ function randomName(length = 8) {
             let video = Buffer.concat(requests[requestId].chunks); //concat chunks to form video
             let fileType = url.split('.').pop();
             const stream = fs.createWriteStream(
-                path.resolve(downloadPath, randomName(10) + '.' + fileType)
+                path.resolve(downloadPath, generateRandomFileName(10) + '.' + fileType)
             );
             stream.write(video, () => {
                 stream.close();
@@ -97,7 +97,7 @@ function randomName(length = 8) {
         } else if (type == 'Image') {
             let fileType = mimeType.split('/').pop();
             const stream = fs.createWriteStream(
-                path.resolve(downloadPath, randomName(10) + '.' + fileType)
+                path.resolve(downloadPath, generateRandomFileName(10) + '.' + fileType)
             );
             stream.write(requestBuffer, () => {
                 stream.close();
