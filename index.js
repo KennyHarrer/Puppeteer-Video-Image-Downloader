@@ -2,110 +2,144 @@ const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 
-const downloadPath = path.resolve(__dirname, 'downloads');
-let targetURL = 'https://example-img-and-video.triggeredforday.repl.co/';
-let downloadFilter = { media: true, image: true };
-let bufferLimit = 50; //in MB
-let requests = {};
+class NetworkCache {
+    constructor({ bufferLimit = 50 } = {}) {
+        this.bufferLimit = bufferLimit; //IN MB
+        this.responses = {};
+        this.downloadFilter = { media: true /* <- videos */, image: false };
+        this.mimeBlacklist = { 'image/svg+xml': true };
+    }
 
-async function waitForRequestLoad(requestID) {
-    if (!requests[requestID]) requests[requestID] = {};
-    if (requests[requestID].loaded == true) return;
-    let waitForLoad;
-    let requestLoaded = new Promise((resolve) => {
-        waitForLoad = resolve;
-    });
-    requests[requestID].loaded = waitForLoad;
-    await requestLoaded;
-}
+    async waitForRequestLoad(requestId) {
+        if (!this.responses[requestId]) this.responses[requestId] = {}; //initalize
+        if (this.responses[requestId].loaded == true) return; //the request has already been loaded, no need to wait.
 
-function generateRandomFileName(length = 8) {
-    return Math.random().toString(16).substr(2, length);
+        await new Promise((resolve) => {
+            this.responses[requestId].loaded = resolve;
+        });
+    }
+
+    registerRequestLoadEvent(client) {
+        client.on('Network.loadingFinished', async ({ requestId }) => {
+            if (!this.responses[requestId]) this.responses[requestId] = {}; //initalize
+            if (typeof this.responses[requestId].loaded == 'function') {
+                //something is waiting for this request to load, resolve promise
+                this.responses[requestId].loaded();
+            }
+            //set to true because this request has loaded,
+            this.responses[requestId].loaded = true;
+        });
+    }
+
+    registerResponseEvent(client) {
+        client.on('Network.responseReceived', async (event) => {
+            let { requestId, response, type } = event;
+            let { url, headers, mimeType } = response;
+
+            if (!this.downloadFilter[type.toLowerCase()]) return; // if i'm not going to be downloaded disregaurd this event
+            if (this.mimeBlacklist[mimeType.toLowerCase()]) return;
+
+            //wait for the request to load
+            await this.waitForRequestLoad(requestId);
+            //request response body
+
+            let responseData;
+            try {
+                responseData = await client.send('Network.getResponseBody', { requestId });
+            } catch (error) {
+                if (error.originalMessage == 'Request content was evicted from inspector cache') {
+                    throw new Error('Increase bufferLimit in index.js');
+                }
+                throw error;
+            }
+
+            //create buffer from response
+            let responseBuffer = Buffer.from(
+                responseData.body,
+                responseData.base64Encoded ? 'base64' : 'utf8'
+            );
+
+            if (type == 'Media') {
+                if (!this.responses[requestId].chunks) this.responses[requestId].chunks = []; //initalize
+                this.responses[requestId].chunks.push(responseBuffer);
+                let { ['content-length']: contentLength, ['content-range']: contentRange } =
+                    headers;
+                let soFar = Number(contentRange.split(' ').pop().split('-').pop().split('/')[0]);
+                let total = Number(contentLength) - 1;
+                if (soFar < total) return; //are we still waiting for more chunks
+                let video = Buffer.concat(this.responses[requestId].chunks); //concat chunks to form video
+                delete this.responses.chunks;
+                this.responses.video = video;
+                this.responses.download = function (fileName) {
+                    const stream = fs.createWriteStream(
+                        path.resolve(downloadPath, fileName + '.' + fileType)
+                    );
+                    stream.write(video, () => {
+                        stream.close();
+                    });
+                };
+                this.responses.fileType = url.split('.').pop();
+                if (typeof this.responses[requestId].received == 'function') {
+                    //something is waiting for this request to be fully received, resolve promise
+                    this.responses[requestId].received();
+                }
+                this.responses.received = true;
+            } else if (type == 'Image') {
+                /*
+                let fileType = mimeType.split('/').pop();
+                const stream = fs.createWriteStream(
+                    path.resolve(downloadPath, generateRandomFileName(10) + '.' + fileType)
+                );
+                stream.write(responseBuffer, () => {
+                    stream.close();
+                });*/
+            } else {
+                console.log('unsupported type ', type);
+            }
+        });
+    }
+
+    async use(pageInstance) {
+        const client = await pageInstance.target().createCDPSession();
+
+        await client.send('Network.enable', {
+            maxResourceBufferSize: 1024 * 1024 * this.bufferLimit,
+            maxTotalBufferSize: 1024 * 1024 * this.bufferLimit,
+        });
+
+        this.registerRequestLoadEvent(client);
+
+        this.registerResponseEvent(client);
+
+        pageInstance.GetCachedResponses = () => {
+            return this.responses;
+        };
+
+        pageInstance.WaitForRequestReceived = async (requestId) => {
+            if (this.responses[requestId].received == true) return; //the request has already been received, no need to wait.
+            return new Promise((resolve) => {
+                //this promise will be resolved when the request has loaded.
+                this.responses[requestId].received = resolve;
+            });
+        };
+    }
 }
 
 (async () => {
     const browser = await puppeteer.launch({
-        headless: true,
+        headless: false,
         args: ['--autoplay-policy=no-user-gesture-required'],
     });
 
     let page = await browser.newPage();
 
-    //create CDP session
-    const client = await page.target().createCDPSession();
+    let networkCache = new NetworkCache();
 
-    //increase buffer limit of session
-    await client.send('Network.enable', {
-        maxResourceBufferSize: 1024 * 1024 * bufferLimit,
-        maxTotalBufferSize: 1024 * 1024 * bufferLimit,
-    });
+    await networkCache.use(page);
 
-    //mark requests as loaded
-    client.on('Network.loadingFinished', async ({ requestId }) => {
-        if (!requests[requestId]) requests[requestId] = {};
-        if (typeof requests[requestId].loaded == 'function') {
-            //run the resolve function for the saved promise
-            requests[requestId].loaded();
-        } else {
-            //set to true because this request has loaded
-            requests[requestId].loaded = true;
-        }
-    });
+    await page.goto('https://example-img-and-video.triggeredforday.repl.co/');
 
-    //handle responses
-    client.on('Network.responseReceived', async (event) => {
-        let { requestId, response, type } = event;
-        let { url, headers, mimeType } = response;
+    let cached = await page.GetCachedResponses();
 
-        if (!downloadFilter[type.toLowerCase()]) return; // if i'm not going to be downloaded disregaurd
-        if (mimeType == 'image/svg+xml') return; //hide these, if you want to download these files simply remove this line.
-
-        //wait for the request to load
-        await waitForRequestLoad(requestId);
-        //grab the request data
-        let requestData;
-        try {
-            requestData = await client.send('Network.getResponseBody', { requestId });
-        } catch (error) {
-            if (error.originalMessage == 'Request content was evicted from inspector cache') {
-                throw new Error('Increase bufferLimit in index.js');
-            }
-            throw error;
-        }
-
-        //create buffer from data
-        let requestBuffer = Buffer.from(
-            requestData.body,
-            requestData.base64Encoded ? 'base64' : 'utf8'
-        );
-
-        if (type == 'Media') {
-            if (!requests[requestId].chunks) requests[requestId].chunks = [];
-            requests[requestId].chunks.push(requestBuffer);
-            let { ['content-length']: contentLength, ['content-range']: contentRange } = headers;
-            let soFar = Number(contentRange.split(' ').pop().split('-').pop().split('/')[0]);
-            let total = Number(contentLength) - 1;
-            if (soFar < total) return; //we are still waiting for more chunks
-            let video = Buffer.concat(requests[requestId].chunks); //concat chunks to form video
-            let fileType = url.split('.').pop();
-            const stream = fs.createWriteStream(
-                path.resolve(downloadPath, generateRandomFileName(10) + '.' + fileType)
-            );
-            stream.write(video, () => {
-                stream.close();
-            });
-        } else if (type == 'Image') {
-            let fileType = mimeType.split('/').pop();
-            const stream = fs.createWriteStream(
-                path.resolve(downloadPath, generateRandomFileName(10) + '.' + fileType)
-            );
-            stream.write(requestBuffer, () => {
-                stream.close();
-            });
-        } else {
-            console.log('unsupported type ', type);
-        }
-    });
-
-    await page.goto(targetURL);
+    console.log(cached);
 })();
