@@ -21,7 +21,7 @@ class NetworkCache {
 
     registerRequestLoadEvent(client) {
         client.on('Network.loadingFinished', async ({ requestId }) => {
-            if (!this.responses[requestId]) this.responses[requestId] = {}; //initalize
+            if (!this.responses[requestId]) return; //initalize
             if (typeof this.responses[requestId].loaded == 'function') {
                 //something is waiting for this request to load, resolve promise
                 this.responses[requestId].loaded();
@@ -66,9 +66,11 @@ class NetworkCache {
                     headers;
                 let soFar = Number(contentRange.split(' ').pop().split('-').pop().split('/')[0]);
                 let total = Number(contentLength) - 1;
+                this.responses[requestId].progress = soFar / total;
                 if (soFar < total) return; //are we still waiting for more chunks
                 let video = Buffer.concat(this.responses[requestId].chunks); //concat chunks to form video
                 delete this.responses[requestId].chunks;
+                delete this.responses[requestId].progress;
                 this.responses[requestId].video = video;
                 this.responses[requestId].save = function (path) {
                     const stream = fs.createWriteStream(path);
