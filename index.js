@@ -68,22 +68,24 @@ class NetworkCache {
                 let total = Number(contentLength) - 1;
                 if (soFar < total) return; //are we still waiting for more chunks
                 let video = Buffer.concat(this.responses[requestId].chunks); //concat chunks to form video
-                delete this.responses.chunks;
-                this.responses.video = video;
-                this.responses.download = function (fileName) {
-                    const stream = fs.createWriteStream(
-                        path.resolve(downloadPath, fileName + '.' + fileType)
-                    );
-                    stream.write(video, () => {
-                        stream.close();
+                delete this.responses[requestId].chunks;
+                this.responses[requestId].video = video;
+                this.responses[requestId].save = function (path) {
+                    const stream = fs.createWriteStream(path);
+                    let promise = new Promise((resolve) => {
+                        stream.write(video, () => {
+                            stream.close();
+                            resolve();
+                        });
                     });
+                    return promise;
                 };
-                this.responses.fileType = url.split('.').pop();
+                this.responses[requestId].fileType = url.split('.').pop();
                 if (typeof this.responses[requestId].received == 'function') {
                     //something is waiting for this request to be fully received, resolve promise
                     this.responses[requestId].received();
                 }
-                this.responses.received = true;
+                this.responses[requestId].received = true;
             } else if (type == 'Image') {
                 /*
                 let fileType = mimeType.split('/').pop();
@@ -139,7 +141,20 @@ class NetworkCache {
 
     await page.goto('https://example-img-and-video.triggeredforday.repl.co/');
 
+    await page.waitForNetworkIdle();
+
     let cached = await page.GetCachedResponses();
+
+    for (let cachedMedia of Object.values(cached)) {
+        if (cachedMedia.save) {
+            await cachedMedia.save(
+                path.resolve(
+                    path.resolve(__dirname, 'downloads'),
+                    Math.random() + '.' + cachedMedia.fileType
+                )
+            );
+        }
+    }
 
     console.log(cached);
 })();
